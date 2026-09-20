@@ -1,134 +1,204 @@
 # Darwinbox FDE — Migration Copilot
 
-A generic, human-supervised client data migration agent for the Darwinbox Forward Deployed Engineer assessment.
+A generic, human-supervised client data migration agent built for the Darwinbox Forward Deployed Engineer assessment.
 
 ## Product contract
 
-The consultant provides:
+The application is designed around a simple customer-facing workflow:
 
-1. **Multiple source files** (`CSV`, `XLSX`) containing inconsistent fields, formats, duplicates, and missing values.
-2. **A target JSON/YAML schema** that defines the exact output structure, field types, required/optional fields, enum values, relationships, and optional source precedence.
+1. The user uploads **multiple source files** (`CSV`, `XLSX`, etc.) containing inconsistent column names, formats, duplicates, missing values, and conflicting records.
+2. The user uploads a **target JSON/YAML schema** describing the exact structure required for the final data.
+3. The agent discovers source-to-target mappings, cleans and reconciles the data, validates it, asks the consultant only when necessary, and pushes the final dataset to a mock target API.
 
-The Employee files in `data/sample/` are only demo data. The engine is entity-agnostic and supports multiple target entities.
+The Employee files shipped with the project are only **demo data**. The migration engine is designed to be entity-agnostic and can work with multiple entities when the supplied target schema defines them.
 
-## What the agent does
+## High-level flow
 
 ```text
 Source files + target schema
         |
         v
-      Profile
+     Profiling
         |
         v
-   Identify entities
+  Entity identification
         |
         v
-  Rank field mappings
+ Source -> target mapping
         |
-        +--> strong / safe -> AUTO
-        |
-        +--> ambiguous -> LLM -> AUTO fallback if safe
-        |
-        +--> no safe fallback -> CONSULTANT REVIEW
+   +----+------------------+
+   |                       |
+   v                       v
+Safe/clear mapping      Ambiguous mapping
+AUTO                    LLM reasoning
+                           |
+                    +------+------+
+                    |             |
+                 safe answer   no safe fallback
+                    |             |
+                    v             v
+                   AUTO      Consultant Review
+                    |
+                    v
+        Transformation planning
+                    |
+        +-----------+------------+
+        |                        |
+   known operation         new/unknown operation
+     Python executes       Consultant approval
         |
         v
-  Transformation plan
-        |
-        +--> known operation -> Python executes
-        |
-        +--> new transformation -> HUMAN APPROVAL
-        |
-        v
- Entity reconciliation + merge policy
+ Cross-file reconciliation
         |
         v
  Target-schema validation
         |
         v
- READY_TO_PUSH
+ READY TO PUSH
         |
         v
- Target API -> retry / rollback
-        |
-        v
- Results + audit trail
+ Mock Target API
+   |             |
+success        failure
+   |             |
+   |          manual retry
+   |             |
+   +------+------+
+          v
+      Results + audit trail
 ```
 
 ### Autonomy principle
 
 **AI proposes; deterministic software executes; policy controls safety.**
 
-The agent does not hard-code customer-specific source-to-target mappings. It discovers mappings at runtime from the uploaded data and the user-provided target schema.
+The agent does not hard-code customer-specific source-to-target mappings. It discovers mappings at runtime from the uploaded source data and the user-provided target schema.
 
-### LLM usage
+## AI and semantic matching
 
-BGE-small is used for semantic candidate matching. The hosted LLM is used only when semantic evidence is ambiguous or a transformation/value normalization needs judgment. Common mappings and transformations do not wait for the LLM.
+### Semantic similarity
 
-The LLM client:
+`BAAI/bge-small-en-v1.5` is used to identify likely source-field → target-field candidates.
 
-- caches repeat prompts;
-- retries transient failures with bounded timeouts;
-- logs request start, HTTP status, served model, usage and success/failure;
-- falls back to a safe semantic choice when one exists;
-- sends only genuinely unresolved cases to consultant review with `llm_unavailable`.
+The similarity score is treated as **evidence, not a probability**. The policy layer also considers datatype compatibility, target constraints, sample values, aliases, candidate separation, and prior consultant decisions.
 
-## Transformation library
+### LLM
 
-The controlled Python transformation library includes:
+The hosted LLM is accessed through OpenRouter using the configured model (`openrouter/free` in the deployed setup). The LLM is intentionally **not called for every field**.
 
-- `trim`
-- `collapse_whitespace`
-- `lowercase`
-- `uppercase`
-- `normalize_name`
-- `normalize_email`
-- `normalize_phone`
-- `normalize_integer`
-- `normalize_decimal`
-- `parse_date`
-- `parse_date_auto`
-- `parse_datetime_auto`
-- `map_value`
-- `extract_number`
-- `split`
-- `join`
-- `normalize_boolean`
+- Clear/high-confidence mappings → automatic resolution.
+- Ambiguous mappings or semantic value transformations → LLM reasoning.
+- If the LLM is unavailable and a safe automatic candidate exists → use the automatic fallback.
+- If no safe fallback exists → send the case to Consultant Review.
+- Unknown/new transformations → require consultant approval before execution.
 
-The LLM may choose/compose only supported operations. An unsupported/new transformation is never executed automatically; it becomes a consultant approval item.
+The LLM client uses bounded retries/timeouts and caching for repeat requests.
 
-## Human-in-the-loop policy
+## Transformation engine
 
-- strong deterministic mapping -> automatic;
-- clear semantic mapping -> automatic;
-- ambiguous mapping -> LLM first, then safe automatic fallback if possible;
-- no safe mapping -> consultant review;
-- known transformation -> automatic;
-- unknown transformation -> consultant approval;
-- source conflict -> use configured precedence if present, otherwise review;
-- strong identity match -> automatic reconciliation;
-- ambiguous identity match -> review;
-- target API failure -> record-level retry or rollback.
+The application contains a controlled Python transformation library for common operations, including:
 
-The application intentionally minimizes human review while avoiding irreversible guesses.
+- trimming and whitespace normalization
+- casing/name normalization
+- email and phone normalization
+- integer/decimal normalization
+- date and datetime parsing
+- value mapping
+- splitting/joining
+- boolean normalization
+- number extraction
 
-## Data model
+Known transformations are executed deterministically by Python. A transformation that is not supported by the library is not executed automatically; it becomes a consultant-approval case.
 
-PostgreSQL is the standard database in the deployed Docker stack. Local development can use SQLite by setting `DATABASE_URL` in `backend/.env`.
+## Human-in-the-loop
 
-Stored objects include:
+Consultant Review is designed for non-technical users. Reviews identify:
 
-- migration runs
-- uploaded files and profiling metadata
-- canonical records
-- consultant escalations and decisions
-- LLM cache
-- audit events
+- the **record** involved;
+- the **source file**;
+- the affected **field/value**;
+- why the agent stopped;
+- the recommended action, when available.
+
+Normal review cases should be resolved with clear UI actions rather than requiring users to write JSON.
+
+Typical review types include:
+
+- ambiguous field mapping;
+- conflicting values across source files;
+- missing required target data;
+- unknown transformations;
+- LLM unavailable when no safe automatic fallback exists.
+
+## Cross-file reconciliation
+
+Multiple representations of the same entity are reconciled into one canonical record using a combination of stable identifiers and other evidence such as email, phone, name/date-of-birth, and fuzzy similarity.
+
+Source conflicts can be resolved through configured source precedence or sent to Consultant Review when a safe automatic choice does not exist.
+
+## Demo / test data
+
+The easiest way to test the application is with the provided Employee demo files:
+
+### Source files
+
+Upload these as the source dataset:
+
+```text
+payroll.xlsx
+crm.csv
+legacy_hr.csv
+```
+
+### Target schema
+
+Upload this as the target schema:
+
+```text
+employee_target_schema.json
+```
+
+These files intentionally demonstrate the type of messy customer data the agent is expected to handle: inconsistent field names, mixed formats, duplicate representations, and source-level differences.
+
+### Expected demo behavior
+
+The demo data includes a **simulated target-system failure** for the `E-FAIL` record. Its first push is intentionally rejected by the mock target API; the record can then be retried and should succeed.
+
+Depending on the exact source files and schema used, the migration can also create **a small number of Consultant Review items**. These are intentional and demonstrate the human-in-the-loop boundary rather than being application errors.
+
+When a migration completes, the **Migration Completed / Results page** shows the final source and target data, audit information, and a **clickable Target API URL at the bottom of the page**. Opening that URL shows the actual records stored by the mock target API.
+
+## Migration lifecycle
+
+The UI keeps the consultant informed with a progress bar, loader, and human-readable status messages such as:
+
+- Reading source files
+- Resolving field mappings
+- Merging duplicate records
+- Waiting for Consultant Review
+- Review needed — check Consultant Review
+- Preparing target data
+- Pushing changes
+- Retry needed — check failed records
+- Migration completed successfully
+
+A running migration can be force-stopped. Restarting the backend does not intentionally resurrect an old in-progress migration.
+
+## Results
+
+After completion, the Results page provides:
+
+- source data tables grouped by uploaded file;
+- canonical target data tables grouped by entity;
+- migration statistics;
+- audit history;
+- clickable Target API URLs showing the actual target records.
 
 ## Local development
 
-### Backend
+Use **Python 3.12** for the backend dependency set.
 
-Use **Python 3.12** for the pinned dependency set.
+### Backend
 
 ```powershell
 cd backend
@@ -155,75 +225,62 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`.
-
-A browser refresh does not resurrect an old active migration. A backend restart stops all non-final migrations. Closing/leaving the page while a migration is active shows a browser confirmation; leaving force-stops the migration.
-
-## Docker / deployed-style environment
-
-From the repository root:
-
-```bash
-cp .env.example .env
-# Set OPENROUTER_API_KEY
-# Optional values: VITE_API_BASE, FRONTEND_ORIGIN, TARGET_API_PUBLIC_URL
-
-docker compose up --build
-```
-
-Services:
-
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:8000`
-- Backend docs: `http://localhost:8000/docs`
-- Target API: `http://localhost:8001`
-- Target API docs: `http://localhost:8001/docs`
-
-The target API stores data in a JSON-backed persistent store in the Docker volume, so pushed records survive a target-container restart during the assessment demo.
-
-## Results page
-
-After successful completion the UI shows:
-
-- original source tables grouped by uploaded file;
-- canonical target tables grouped by entity;
-- clickable public target API URLs;
-- the audit trail;
-- final migration statistics.
-
-## Demo data
-
-Use:
+Open:
 
 ```text
-data/sample/legacy_hr.csv
-data/sample/payroll.xlsx
-data/sample/crm.csv
-data/sample/employee_target_schema.json
+http://localhost:5173
 ```
 
-The demo includes:
+Backend health details:
 
-- inconsistent source column names;
-- mixed date formats;
-- duplicate employee representations;
-- one deliberately ambiguous mapping scenario;
-- an intentionally one-time target API failure for `E-FAIL` so retry/rollback can be demonstrated.
+```text
+http://localhost:8000/api/health/details
+```
 
-For multi-entity testing, the target schema format supports multiple entities with independent fields, aliases, uniqueness rules, relationships, and source precedence.
+## Environment variables
 
-## Tests
+At minimum, the backend needs the OpenRouter key for AI-powered reasoning:
+
+```env
+OPENROUTER_API_KEY=your_key_here
+LLM_MODEL=openrouter/free
+```
+
+Do not commit the real API key to GitHub.
+
+## Database
+
+The deployed setup uses **PostgreSQL**. Local development can use SQLite when configured through `DATABASE_URL`.
+
+Stored data includes migration runs, uploaded-file metadata, canonical records, consultant decisions, LLM cache entries, and audit events.
+
+## Deployment
+
+The application is designed for a multi-service deployment:
+
+```text
+Frontend  -> React/Vite static site
+Backend   -> FastAPI
+Target API -> FastAPI mock destination
+Database  -> PostgreSQL
+LLM       -> OpenRouter
+```
+
+A `render.yaml` Blueprint is included for Render deployment.
+
+## Testing
+
+From the backend directory:
 
 ```powershell
-cd backend
 pytest -q
 ```
 
-The suite covers transformations, semantic/mapping policy, entity resolution, merge precedence, multi-entity schemas, LLM fallback behavior, and target API failure/retry behavior.
+The test suite covers mapping policy, transformations, reconciliation, conflict handling, LLM fallback behavior, migration lifecycle, and target API retry scenarios.
 
 ## Submission artifacts
 
-- `docs/architecture.md` — architecture and autonomy boundary.
+- `docs/architecture.md` — system architecture and autonomy boundary.
 - `docs/assessment-writeup.md` — one-page approach write-up.
-- `docs/demo-script.md` — suggested evaluator demo path.
-- `docs/deployment.md` — deployed-style setup and environment variables.
+- `docs/demo-script.md` — suggested evaluator demo flow.
+- `docs/deployment.md` — deployment and environment configuration.
