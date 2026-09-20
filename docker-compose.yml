@@ -1,0 +1,64 @@
+services:
+  db:
+    image: postgres:16
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d migration_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      POSTGRES_DB: migration_agent
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/migration_agent
+      UPLOADS_DIR: /app/data/uploads
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_MODEL: ${LLM_MODEL:-openrouter/free}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      SEMANTIC_MODEL: ${SEMANTIC_MODEL:-BAAI/bge-small-en-v1.5}
+      AUTO_MAPPING_THRESHOLD: ${AUTO_MAPPING_THRESHOLD:-0.86}
+      AUTO_MAPPING_MARGIN: ${AUTO_MAPPING_MARGIN:-0.08}
+      TARGET_API_URL: http://target-api:8001
+      TARGET_API_PUBLIC_URL: ${TARGET_API_PUBLIC_URL:-http://localhost:8001}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      target-api:
+        condition: service_started
+
+  target-api:
+    build: ./target_api
+    environment:
+      TARGET_STORE_PATH: /app/data/target_store.json
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./target-data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000/api}
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

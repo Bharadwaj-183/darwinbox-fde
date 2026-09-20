@@ -1,0 +1,113 @@
+{
+  "version": "1.0",
+  "entities": [
+    {
+      "entity_name": "employee",
+      "description": "A person employed by the organization",
+      "source_precedence": [
+        "legacy_hr.csv",
+        "payroll.xlsx",
+        "crm.csv"
+      ],
+      "fields": [
+        {
+          "name": "employee_id",
+          "description": "Stable employee identifier",
+          "data_type": "string",
+          "required": true,
+          "unique": true,
+          "aliases": [
+            "emp id",
+            "employee number",
+            "staff id"
+          ]
+        },
+        {
+          "name": "first_name",
+          "description": "Employee given name",
+          "data_type": "string",
+          "required": true,
+          "aliases": [
+            "given name",
+            "fname"
+          ]
+        },
+        {
+          "name": "last_name",
+          "description": "Employee family name",
+          "data_type": "string",
+          "required": true,
+          "aliases": [
+            "surname",
+            "family name"
+          ]
+        },
+        {
+          "name": "email",
+          "description": "Work email address",
+          "data_type": "string",
+          "required": true,
+          "unique": true,
+          "aliases": [
+            "work email",
+            "email address"
+          ]
+        },
+        {
+          "name": "phone",
+          "description": "Employee phone number",
+          "data_type": "string",
+          "aliases": [
+            "mobile",
+            "phone number"
+          ]
+        },
+        {
+          "name": "date_of_birth",
+          "description": "Employee birth date",
+          "data_type": "date",
+          "aliases": [
+            "dob",
+            "birth date"
+          ]
+        },
+        {
+          "name": "joining_date",
+          "description": "Date the employee joined the organization",
+          "data_type": "date",
+          "required": true,
+          "aliases": [
+            "date of joining",
+            "doj",
+            "start date"
+          ]
+        },
+        {
+          "name": "department",
+          "description": "Department or organizational team",
+          "data_type": "string",
+          "required": true,
+          "aliases": [
+            "dept",
+            "team",
+            "organisation",
+            "org"
+          ]
+        },
+        {
+          "name": "employment_status",
+          "description": "Whether the employee is currently employed",
+          "data_type": "string",
+          "required": true,
+          "enum_values": [
+            "ACTIVE",
+            "INACTIVE"
+          ],
+          "aliases": [
+            "status"
+          ]
+        }
+      ]
+    }
+  ]
+}

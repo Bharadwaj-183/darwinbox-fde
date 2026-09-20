@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.vite/
+backend/data/*.db
+backend/data/uploads/
+target_api/data/target_store.json
+target-data/
+.pytest_cache/
